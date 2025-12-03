@@ -1,0 +1,103 @@
+import { EquipoModel } from "../../models/catalogos/equipo.model.js";
+
+const asyncHandler = (fn) => (req, res, next) =>
+  Promise.resolve(fn(req, res, next)).catch((err) => {
+    console.error("Error en el controlador:", err);
+    const statusCode = err.statusCode || 500;
+    res.status(statusCode).json({
+      message: err.message || "Ocurrió un error en el servidor.",
+      error: process.env.NODE_ENV === "development" ? err.stack : undefined,
+    });
+  });
+
+/**
+ * Crea un nuevo equipo.
+ */
+export const create = asyncHandler(async (req, res) => {
+  if (!req.body.nombre) {
+    return res.status(400).json({ message: "el nombre es requerido" });
+  }
+
+  if (!req.body.personas) {
+    return res.status(400).json({ message: "Las personas son requeridas" });
+  }
+
+  const nuevoEquipo = await EquipoModel.create(req.body);
+  res.status(201).json(nuevoEquipo);
+});
+
+/**
+ * Obtiene todos los equipos.
+ */
+export const getAll = asyncHandler(async (req, res) => {
+  const equipos = await EquipoModel.getAll();
+  res.status(200).json(equipos);
+});
+
+/**
+ * Actualiza una equipo por su ID.
+ */
+export const updateById = asyncHandler(async (req, res) => {
+  const id = Number(req.params.id);
+
+  if (isNaN(id)) {
+    return res.status(400).json({ message: "ID inválido" });
+  }
+
+  if (!req.body.nombre) {
+    return res.status(400).json({ message: "el nombre es requerido" });
+  }
+
+  if (!req.body.personas) {
+    return res.status(400).json({ message: "Las personas son requeridas" });
+  }
+
+  const equipoActualizado = await EquipoModel.update(id, req.body);
+  res.status(200).json(equipoActualizado);
+});
+
+/**
+ * Actualiza el estatus de una equipo por su ID.
+ */
+export const updateStatus = asyncHandler(async (req, res) => {
+  const id = Number(req.params.id);
+
+  if (isNaN(id)) {
+    return res.status(400).json({ message: "ID inválido" });
+  }
+
+  if (req.body.estatus === undefined) {
+    return res.status(400).json({ message: "El estatus es requerido" });
+  }
+
+  const equipoActualizado = await EquipoModel.updateStatus(id, req.body);
+  res.status(200).json(equipoActualizado);
+});
+
+/**
+ * Obtiene los equipos de una persona por su id.
+ */
+export const getByTeam = asyncHandler(async (req, res) => {
+  const id = Number(req.params.id);
+
+  if (isNaN(id)) {
+    return res.status(400).json({ message: "ID inválido" });
+  }
+
+  const equipos = await EquipoModel.getByTeam(id);
+  res.status(200).json(equipos);
+});
+
+/**
+ * Obtiene un equipo por su ID.
+ */
+export const getById = asyncHandler(async (req, res) => {
+  const id = Number(req.params.id);
+
+  if (isNaN(id)) {
+    return res.status(400).json({ message: "ID inválido" });
+  }
+
+  const equipo = await EquipoModel.getById(id);
+  res.status(200).json(equipo);
+});
