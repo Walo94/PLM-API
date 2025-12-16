@@ -113,3 +113,44 @@ export const logout = asyncHandler(async (req, res) => {
     message: "Sesión cerrada exitosamente",
   });
 });
+
+/**
+ * Cambia la contraseña de un usuario
+ */
+export const changePassword = asyncHandler(async (req, res) => {
+  const { userId, currentPassword, newPassword } = req.body;
+
+  // Validaciones
+  if (!userId || !currentPassword || !newPassword) {
+    return res.status(400).json({
+      message: "Todos los campos son requeridos",
+    });
+  }
+
+  if (newPassword.length < 6) {
+    return res.status(400).json({
+      message: "La nueva contraseña debe tener al menos 6 caracteres",
+    });
+  }
+
+  if (currentPassword === newPassword) {
+    return res.status(400).json({
+      message: "La nueva contraseña debe ser diferente a la actual",
+    });
+  }
+
+  try {
+    await AuthModel.changePassword(userId, currentPassword, newPassword);
+
+    res.status(200).json({
+      message: "Contraseña actualizada correctamente",
+    });
+  } catch (error) {
+    if (error.message === "La contraseña actual es incorrecta") {
+      return res.status(401).json({
+        message: error.message,
+      });
+    }
+    throw error;
+  }
+});

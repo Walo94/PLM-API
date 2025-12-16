@@ -124,7 +124,7 @@ const enviarNotificacionesAtraso = async (proyectoId, actividades) => {
     }
 
     const proyectoUrl = `${
-      process.env.FRONTEND_URL || "http://localhost:8080"
+      process.env.FRONTEND_URL || "http://192.168.70.108:8080"
     }/proyectos/avance/${proyectoId}`;
 
     // Crear notificaciones en la base de datos

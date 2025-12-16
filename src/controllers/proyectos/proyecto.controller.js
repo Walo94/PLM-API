@@ -637,3 +637,53 @@ export const getFichaTecnica = asyncHandler(async (req, res) => {
 
   res.status(200).json(proyecto);
 });
+
+/**
+ * Obtiene los KPIs de efectividad de un proyecto
+ */
+export const getKPIs = asyncHandler(async (req, res) => {
+  const id = Number(req.params.id);
+
+  if (isNaN(id)) {
+    return res.status(400).json({ message: "ID inválido" });
+  }
+
+  const kpis = await ProyectoModel.getKPIs(id);
+  res.status(200).json(kpis);
+});
+
+/**
+ * Extiende la duración de una actividad y actualiza el cronograma
+ */
+export const extenderDiasActividad = asyncHandler(async (req, res) => {
+  const { actividadId } = req.params;
+  const { diasExtra } = req.body;
+
+  if (!actividadId || diasExtra === undefined) {
+    return res
+      .status(400)
+      .json({ message: "Actividad y días extra son requeridos" });
+  }
+
+  const resultado = await ProyectoModel.extenderDiasActividad(
+    Number(actividadId),
+    Number(diasExtra)
+  );
+
+  // Opcional: Notificar vía Socket que el timeline cambió
+  const io = req.app.get("io");
+  if (io) {
+    io.emit("timeline_recalculado", { actividadId });
+  }
+
+  res.status(200).json(resultado);
+});
+
+/**
+ * Consulta actividades aptas para ajuste de tiempo
+ */
+export const getActividadesEditables = asyncHandler(async (req, res) => {
+  const { id } = req.params; // ProyectoId
+  const actividades = await ProyectoModel.getActividadesEditables(Number(id));
+  res.status(200).json(actividades);
+});

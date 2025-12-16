@@ -75,4 +75,44 @@ INNER JOIN Puestos ps ON p.Puesto = ps.Id
       throw err;
     }
   },
+
+  /**
+   * Cambia la contraseña de un usuario
+   */
+  changePassword: async (userId, currentPassword, newPassword) => {
+    const { pool } = _getDbConfig();
+    const connection = await pool();
+
+    try {
+      // 1. Verificar que la contraseña actual sea correcta
+      const requestVerify = connection.request();
+      requestVerify.input("userId", sql.SmallInt, userId);
+      requestVerify.input("currentPassword", sql.VarChar(50), currentPassword);
+
+      const verifyResult = await requestVerify.query(
+        `SELECT Id FROM dbo.Usuarios 
+       WHERE Id = @userId AND Password = @currentPassword AND Estatus = 1`
+      );
+
+      if (verifyResult.recordset.length === 0) {
+        throw new Error("La contraseña actual es incorrecta");
+      }
+
+      // 2. Actualizar la contraseña
+      const requestUpdate = connection.request();
+      requestUpdate.input("userId", sql.SmallInt, userId);
+      requestUpdate.input("newPassword", sql.VarChar(50), newPassword);
+
+      await requestUpdate.query(
+        `UPDATE dbo.Usuarios 
+       SET Password = @newPassword 
+       WHERE Id = @userId`
+      );
+
+      return { success: true };
+    } catch (err) {
+      console.error("Error al cambiar contraseña:", err);
+      throw err;
+    }
+  },
 };

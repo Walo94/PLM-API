@@ -5,83 +5,98 @@ const _getDbConfig = () => {
   return { pool: connectDB };
 };
 
-const _crearFechaLocal = (fechaString) => {
-  if (!fechaString) return null;
-  // Aseguramos que sea string, si ya es Date, lo clonamos
-  if (fechaString instanceof Date) {
-    const d = new Date(fechaString);
-    d.setHours(12, 0, 0, 0);
-    return d;
+/**
+ * Crea una fecha en hora local sin interferencia de zona horaria
+ */
+const _crearFechaLocal = (fecha) => {
+  if (!fecha) return null;
+
+  // Si ya es un Date, extraer componentes
+  let year, month, day;
+
+  if (fecha instanceof Date) {
+    // Usar UTC para evitar cambios de zona horaria
+    year = fecha.getUTCFullYear();
+    month = fecha.getUTCMonth();
+    day = fecha.getUTCDate();
+  } else {
+    // Si es string "2025-12-17" o "2025-12-17T00:00:00.000Z"
+    const fechaStr = fecha.toString().split("T")[0];
+    const [y, m, d] = fechaStr.split("-").map(Number);
+    year = y;
+    month = m - 1; // Mes en JS es 0-indexed
+    day = d;
   }
 
-  // Si viene como "2025-12-04T00:00:00.000Z" nos quedamos solo con la parte de la fecha
-  const fechaParte = fechaString.toString().split("T")[0];
-  const [anio, mes, dia] = fechaParte.split("-");
-
-  // Creamos la fecha: Año, Mes (index 0), Día, 12 horas.
-  return new Date(parseInt(anio), parseInt(mes) - 1, parseInt(dia), 12, 0, 0);
+  // Crear fecha en hora local a mediodía
+  return new Date(year, month, day, 12, 0, 0, 0);
 };
 
 /**
- * Sumar días hábiles respetando fines de semana y festivos.
- * Lógica: Avanzar día por día y contar solo si es lunes-viernes.
+ * Sumar días hábiles respetando fines de semana y festivos
  */
-const agregarDiasHabiles = async (fechaInicio, diasAAgregar, connection) => {
-  const request = connection.request();
-
-  const result = await request.query(
-    `SELECT Fecha FROM dbo.DiasNoLaborables WHERE Estatus = 1`
-  );
+const agregarDiasHabiles = async (fechaInicio, diasAAgregar, transaction) => {
+  // Obtener días no laborables
+  const result = await transaction
+    .request()
+    .query(`SELECT Fecha FROM dbo.DiasNoLaborables WHERE Estatus = 1`);
 
   const diasNoLaborables = new Set(
-    result.recordset.map((r) => r.Fecha.toISOString().split("T")[0])
+    result.recordset.map((r) => {
+      const f = _crearFechaLocal(r.Fecha);
+      return `${f.getFullYear()}-${String(f.getMonth() + 1).padStart(
+        2,
+        "0"
+      )}-${String(f.getDate()).padStart(2, "0")}`;
+    })
   );
 
-  // Usamos una copia de la fecha garantizada a mediodía
-  let fecha = new Date(fechaInicio);
-  fecha.setHours(12, 0, 0, 0);
+  // Crear fecha local desde el inicio
+  let fecha = _crearFechaLocal(fechaInicio);
 
-  // CASO 1: diasAAgregar es 0 (La tarea empieza y termina el mismo día)
-  // Solo validamos que HOY no sea sábado/domingo. Si es, pasamos al lunes.
+  console.log(
+    `🔧 agregarDiasHabiles: Inicio=${
+      fecha.toISOString().split("T")[0]
+    }, Días a agregar=${diasAAgregar}`
+  );
+
+  // Si no hay días que agregar, retornar la fecha sin cambios
   if (diasAAgregar === 0) {
-    while (true) {
-      const diaSemana = fecha.getDay(); // 0=Domingo, 6=Sábado
-      const fechaStr = fecha.toISOString().split("T")[0]; // YYYY-MM-DD
-
-      // Es inhábil si es Domingo, Sábado o Festivo
-      const esInhabil =
-        diaSemana === 0 || diaSemana === 6 || diasNoLaborables.has(fechaStr);
-
-      if (!esInhabil) break; // Es válido (Lun-Vie), salimos.
-
-      // Si es inhábil, corremos la fecha un día natural
-      fecha.setDate(fecha.getDate() + 1);
-    }
     return fecha;
   }
 
-  // CASO 2: diasAAgregar > 0
-  let diasSumados = 0;
+  let diasContados = 0;
 
-  while (diasSumados < diasAAgregar) {
-    // 1. Avanzamos un día natural
+  // Contar días hábiles hacia adelante
+  while (diasContados < diasAAgregar) {
+    // Avanzar un día
     fecha.setDate(fecha.getDate() + 1);
 
-    const diaSemana = fecha.getDay();
-    const fechaStr = fecha.toISOString().split("T")[0];
+    const diaSemana = fecha.getDay(); // 0=Dom, 6=Sáb
+    const fechaStr = `${fecha.getFullYear()}-${String(
+      fecha.getMonth() + 1
+    ).padStart(2, "0")}-${String(fecha.getDate()).padStart(2, "0")}`;
 
-    // 2. Verificamos si es inhábil
-    const esInhabil =
-      diaSemana === 0 || diaSemana === 6 || diasNoLaborables.has(fechaStr);
+    // Verificar si es día hábil
+    const esDiaHabil =
+      diaSemana !== 0 && // No es domingo
+      diaSemana !== 6 && // No es sábado
+      !diasNoLaborables.has(fechaStr); // No es festivo
 
-    // 3. Solo contamos si es día hábil
-    if (!esInhabil) {
-      diasSumados++;
+    console.log(
+      `   📆 ${fechaStr} (${
+        ["Dom", "Lun", "Mar", "Mié", "Jue", "Vie", "Sáb"][diaSemana]
+      }) - ${esDiaHabil ? "HÁBIL ✓" : "INHÁBIL ✗"}`
+    );
+
+    // Solo contar si es día hábil
+    if (esDiaHabil) {
+      diasContados++;
+      console.log(`      → Días contados: ${diasContados}/${diasAAgregar}`);
     }
-    // Si es inhábil (ej. Sábado), el bucle sigue, la fecha avanza al Domingo,
-    // diasSumados NO aumenta, y seguimos hasta encontrar lunes.
   }
 
+  console.log(`✅ Resultado final: ${fecha.toISOString().split("T")[0]}\n`);
   return fecha;
 };
 
@@ -221,6 +236,57 @@ const _actualizarProyectoAvance = async (proyectoId, transaction) => {
        FROM dbo.Proyectos p
        WHERE p.Id = @proyectoId`
   );
+};
+
+/**
+ * Recalcula fechas de actividades sucesoras recursivamente
+ */
+const _recalcularSucesores = async (
+  actividadPadreId,
+  fechaFinPadre,
+  transaction
+) => {
+  // Obtener actividades que dependen de esta
+  const resSucesores = await transaction
+    .request()
+    .input("padreId", sql.Int, actividadPadreId).query(`
+      SELECT Id, DiasHabiles, Estatus, Orden
+      FROM dbo.ProyectosActividades 
+      WHERE DependeDeActividadId = @padreId 
+        AND Estatus NOT IN (3, 6)
+    `);
+
+  for (const sucesor of resSucesores.recordset) {
+    // La actividad sucesora empieza el SIGUIENTE día hábil después del fin del padre
+    const nuevaFechaInicio = await agregarDiasHabiles(
+      fechaFinPadre,
+      1,
+      transaction
+    );
+
+    // Si la actividad dura N días, termina N-1 días después de su inicio
+    const nuevaFechaFin = await agregarDiasHabiles(
+      nuevaFechaInicio,
+      sucesor.DiasHabiles - 1,
+      transaction
+    );
+
+    const inicioStr = nuevaFechaInicio.toISOString().split("T")[0];
+    const finStr = nuevaFechaFin.toISOString().split("T")[0];
+
+    await transaction
+      .request()
+      .input("id", sql.Int, sucesor.Id)
+      .input("inicio", sql.Date, nuevaFechaInicio)
+      .input("fin", sql.Date, nuevaFechaFin).query(`
+        UPDATE dbo.ProyectosActividades 
+        SET FechaInicioCalculada = @inicio, 
+            FechaFinCalculada = @fin 
+        WHERE Id = @id
+      `);
+
+    await _recalcularSucesores(sucesor.Id, nuevaFechaFin, transaction);
+  }
 };
 
 export const ProyectoModel = {
@@ -519,12 +585,11 @@ export const ProyectoModel = {
       const actividad = resultActividad.recordset[0];
       const estatusAnterior = actividad.Estatus;
 
-      // --- 2. VALIDACIONES DE NEGOCIO (Tus validaciones originales) ---
+      // --- 2. VALIDACIONES DE NEGOCIO ---
 
       // Validación de Dependencias
       if (data.estatus === 2 && actividad.DependeDeActividadId) {
         if (actividad.EstatusDependencia !== 3) {
-          // Nota: Ajusta si 3 es el estatus correcto de "terminado" para dependencias
           throw new Error(
             "No puedes iniciar esta actividad porque la anterior no ha sido completada."
           );
@@ -541,19 +606,32 @@ export const ProyectoModel = {
         );
       }
 
-      // --- 3. LÓGICA DE FECHAS Y ATRASOS (AQUÍ ESTÁ EL CAMBIO CLAVE) ---
+      // --- 3. LÓGICA DE FECHAS Y ATRASOS ---
 
       let diasAtraso = actividad.DiasAtraso; // Mantener el actual por defecto
-      let fechaFinReal = null;
+      let fechaFinReal = actividad.FechaFinReal; // Mantener la actual por defecto
 
-      // SI SE COMPLETA (6) O AUTORIZA (3): EL ATRASO SE RESETEA A 0
-      if (data.estatus === 3 || data.estatus === 6) {
-        diasAtraso = 0; // <--- RESETEO DEL ATRASO
-        fechaFinReal = fechaMexico;
-      } else {
-        // Si vuelve a proceso o pendiente, podrías querer recalcular o dejarlo como estaba
-        // Por ahora mantenemos la lógica de que si no es fin, no hay fecha fin real
+      // SOLO cuando el estatus es 3 (AUTORIZADA/COMPLETADA):
+      // - Se marca la fecha de finalización real
+      // - Se resetea el atraso a 0
+      if (data.estatus === 3) {
+        diasAtraso = 0;
+        fechaFinReal = new Date();
+      }
+      // Si cambia a estatus 6 (enviada a autorización):
+      // - NO se marca como finalizada aún
+      // - Se mantiene el atraso actual
+      else if (data.estatus === 6) {
+        // Mantener valores actuales, no resetear atraso ni fecha fin
+        fechaFinReal = actividad.FechaFinReal;
+        diasAtraso = actividad.DiasAtraso;
+      }
+      // Para otros estatus (regreso a proceso, pendiente, etc.):
+      // - Se limpia la fecha fin real si existía
+      // - Se mantiene o recalcula el atraso según sea necesario
+      else if (data.estatus === 2 || data.estatus === 1) {
         fechaFinReal = null;
+        // Mantener el atraso actual o recalcularlo si es necesario
       }
 
       // --- 4. UPDATE DE LA ACTIVIDAD ---
@@ -566,7 +644,7 @@ export const ProyectoModel = {
         data.fechaInicioReal || actividad.FechaInicioReal
       );
       requestUpdate.input("fechaFinReal", sql.Date, fechaFinReal);
-      requestUpdate.input("diasAtraso", sql.SmallInt, diasAtraso); // Guardamos 0 si es 3 o 6
+      requestUpdate.input("diasAtraso", sql.SmallInt, diasAtraso);
       requestUpdate.input(
         "observaciones",
         sql.VarChar(sql.MAX),
@@ -604,12 +682,9 @@ export const ProyectoModel = {
 
       // --- 6. ACTUALIZAR ENCABEZADO DEL PROYECTO (AVANCE Y ATRASO TOTAL) ---
 
-      // A. Calcular nuevo total de atraso del proyecto
-      // Sumamos solo las actividades que NO están en 3, 6 (o 7 canceladas)
       const requestUpdateProyecto = transaction.request();
       requestUpdateProyecto.input("proyectoId", sql.Int, actividad.ProyectoId);
 
-      // Actualizamos el proyecto y obtenemos el nuevo total en una sola llamada
       const resultProyecto = await requestUpdateProyecto.query(`
         -- 1. Actualizar DiasAtraso del Proyecto
         UPDATE dbo.Proyectos
@@ -617,7 +692,7 @@ export const ProyectoModel = {
             SELECT ISNULL(SUM(DiasAtraso), 0)
             FROM dbo.ProyectosActividades
             WHERE ProyectoId = @proyectoId
-            AND Estatus NOT IN (3, 6, 7) -- Ignorar completas/canceladas
+            AND Estatus NOT IN (3, 6, 7) -- Ignorar completas/autorizadas/canceladas
         )
         WHERE Id = @proyectoId;
 
@@ -627,7 +702,7 @@ export const ProyectoModel = {
 
       const nuevoDiasAtrasoTotal = resultProyecto.recordset[0].DiasAtraso;
 
-      // B. Tu función existente para el porcentaje de avance (si la tienes separada)
+      // Actualizar porcentaje de avance del proyecto
       if (typeof _actualizarProyectoAvance === "function") {
         await _actualizarProyectoAvance(actividad.ProyectoId, transaction);
       }
@@ -1172,5 +1247,343 @@ export const ProyectoModel = {
       prioridadNombre: record.PrioridadNombre,
       prioridadColor: record.PrioridadColor,
     };
+  },
+
+  /**
+   * Obtiene los KPIs de efectividad de un proyecto
+   */
+  getKPIs: async (proyectoId) => {
+    const { pool } = _getDbConfig();
+    const connection = await pool();
+
+    const request = connection.request();
+    request.input("proyectoId", sql.Int, proyectoId);
+
+    // Obtener todas las actividades del proyecto
+    const result = await request.query(`
+    SELECT 
+      pa.Id,
+      pa.Orden,
+      pa.ActividadId,
+      a.Descripcion as ActividadNombre,
+      pa.Entregable,
+      pr.Descripcion as ProcesoNombre,
+      pa.FechaInicioCalculada,
+      pa.FechaFinCalculada,
+      pa.FechaInicioReal,
+      pa.FechaFinReal,
+      pa.DiasHabiles,
+      pa.DiasAtraso,
+      pa.Estatus,
+      uResp.Usuario as ResponsableNombre
+    FROM dbo.ProyectosActividades pa
+    LEFT JOIN dbo.Actividades a ON pa.ActividadId = a.Id
+    LEFT JOIN dbo.Procesos pr ON pa.ProcesoId = pr.Id
+    LEFT JOIN dbo.Usuarios uResp ON pa.ResponsableId = uResp.Id
+    WHERE pa.ProyectoId = @proyectoId
+    ORDER BY pa.Orden
+  `);
+
+    const actividades = result.recordset;
+
+    // Obtener días no laborables para cálculos precisos
+    const resultDiasNoLaborables = await connection
+      .request()
+      .query(`SELECT Fecha FROM dbo.DiasNoLaborables WHERE Estatus = 1`);
+
+    const diasNoLaborables = new Set(
+      resultDiasNoLaborables.recordset.map(
+        (r) => r.Fecha.toISOString().split("T")[0]
+      )
+    );
+
+    // Función auxiliar para calcular días hábiles entre dos fechas
+    const calcularDiasHabilesEntreFechas = (fechaInicio, fechaFin) => {
+      if (!fechaInicio || !fechaFin) return 0;
+
+      let fecha = new Date(fechaInicio);
+      let diasHabiles = 0;
+      const fechaLimite = new Date(fechaFin);
+
+      while (fecha <= fechaLimite) {
+        const diaSemana = fecha.getDay();
+        const fechaStr = fecha.toISOString().split("T")[0];
+
+        if (
+          diaSemana !== 0 &&
+          diaSemana !== 6 &&
+          !diasNoLaborables.has(fechaStr)
+        ) {
+          diasHabiles++;
+        }
+
+        fecha.setDate(fecha.getDate() + 1);
+      }
+
+      return diasHabiles;
+    };
+
+    // Calcular KPIs por actividad
+    const actividadesKPIs = actividades.map((act) => {
+      let efectividad = 0;
+      let variacionInicio = 0;
+      let variacionFin = 0;
+      let estado = "pendiente";
+      let duracionPlanificada = act.DiasHabiles;
+      let duracionReal = 0;
+
+      // Solo calcular si la actividad está completada (estatus 3 o 6)
+      if (
+        (act.Estatus === 3 || act.Estatus === 6) &&
+        act.FechaInicioReal &&
+        act.FechaFinReal
+      ) {
+        estado = "completada";
+
+        // Calcular variación de inicio (días de diferencia)
+        variacionInicio = calcularDiasHabilesEntreFechas(
+          act.FechaInicioCalculada,
+          act.FechaInicioReal
+        );
+
+        // Si inició antes, la variación es negativa
+        if (
+          new Date(act.FechaInicioReal) < new Date(act.FechaInicioCalculada)
+        ) {
+          variacionInicio = -variacionInicio;
+        }
+
+        // Calcular variación de fin
+        variacionFin = calcularDiasHabilesEntreFechas(
+          act.FechaFinCalculada,
+          act.FechaFinReal
+        );
+
+        if (new Date(act.FechaFinReal) < new Date(act.FechaFinCalculada)) {
+          variacionFin = -variacionFin;
+        }
+
+        // Duración real
+        duracionReal = calcularDiasHabilesEntreFechas(
+          act.FechaInicioReal,
+          act.FechaFinReal
+        );
+
+        // Calcular efectividad basada en cumplimiento de fechas
+        // 100% si termina en fecha o antes
+        // Se penaliza proporcionalmente por días de atraso
+        if (variacionFin <= 0) {
+          efectividad = 100;
+        } else {
+          // Por cada día de atraso se reduce un porcentaje
+          const penalizacion = (variacionFin / duracionPlanificada) * 100;
+          efectividad = Math.max(0, 100 - penalizacion);
+        }
+      } else if (act.Estatus === 2) {
+        estado = "en_proceso";
+      } else if (act.Estatus === 4) {
+        estado = "atrasada";
+      } else if (act.Estatus === 5) {
+        estado = "bloqueada";
+      }
+
+      return {
+        id: act.Id,
+        orden: act.Orden,
+        actividadNombre: act.ActividadNombre,
+        procesoNombre: act.ProcesoNombre,
+        entregable: act.Entregable,
+        responsableNombre: act.ResponsableNombre,
+        fechaInicioCalculada: act.FechaInicioCalculada,
+        fechaFinCalculada: act.FechaFinCalculada,
+        fechaInicioReal: act.FechaInicioReal,
+        fechaFinReal: act.FechaFinReal,
+        duracionPlanificada,
+        duracionReal,
+        variacionInicio,
+        variacionFin,
+        efectividad: Math.round(efectividad * 10) / 10,
+        estado,
+        estatus: act.Estatus,
+        diasAtraso: act.DiasAtraso || 0,
+      };
+    });
+
+    // Calcular KPIs generales del proyecto
+    const actividadesCompletadas = actividadesKPIs.filter(
+      (a) => a.estado === "completada"
+    );
+
+    const efectividadGeneral =
+      actividadesCompletadas.length > 0
+        ? actividadesCompletadas.reduce((sum, a) => sum + a.efectividad, 0) /
+          actividadesCompletadas.length
+        : 0;
+
+    const totalActividades = actividades.length;
+    const completadas = actividadesCompletadas.length;
+    const enProceso = actividadesKPIs.filter(
+      (a) => a.estado === "en_proceso"
+    ).length;
+    const pendientes = actividadesKPIs.filter(
+      (a) => a.estado === "pendiente"
+    ).length;
+    const atrasadas = actividadesKPIs.filter(
+      (a) => a.estado === "atrasada"
+    ).length;
+    const bloqueadas = actividadesKPIs.filter(
+      (a) => a.estado === "bloqueada"
+    ).length;
+
+    // Actividades que terminaron a tiempo (sin atraso)
+    const actividadesATiempo = actividadesCompletadas.filter(
+      (a) => a.variacionFin <= 0
+    ).length;
+
+    // Actividades que terminaron tarde
+    const actividadesTarde = actividadesCompletadas.filter(
+      (a) => a.variacionFin > 0
+    ).length;
+
+    // Promedio de días de variación
+    const promedioVariacionFin =
+      actividadesCompletadas.length > 0
+        ? actividadesCompletadas.reduce((sum, a) => sum + a.variacionFin, 0) /
+          actividadesCompletadas.length
+        : 0;
+
+    return {
+      resumenGeneral: {
+        efectividadGeneral: Math.round(efectividadGeneral * 10) / 10,
+        totalActividades,
+        completadas,
+        enProceso,
+        pendientes,
+        atrasadas,
+        bloqueadas,
+        porcentajeCompletado: Math.round(
+          (completadas / totalActividades) * 100
+        ),
+        actividadesATiempo,
+        actividadesTarde,
+        promedioVariacionFin: Math.round(promedioVariacionFin * 10) / 10,
+      },
+      actividadesKPIs,
+    };
+  },
+
+  /**
+   * Obtiene actividades a las que se les puede extender el tiempo (Estatus != 3 y 6)
+   */
+  getActividadesEditables: async (proyectoId) => {
+    const { pool } = _getDbConfig();
+    const connection = await pool();
+    const result = await connection
+      .request()
+      .input("proyectoId", sql.Int, proyectoId).query(`
+      SELECT A.Id, A.Orden, A.ActividadId, AC.Descripcion, A.DiasHabiles, A.FechaInicioCalculada, A.FechaFinCalculada, A.Estatus
+      FROM dbo.ProyectosActividades A
+	  INNER JOIN Actividades AC
+	  ON A.ActividadId = AC.Id
+      WHERE A.ProyectoId = @proyectoId AND A.Estatus NOT IN (3, 6)
+      ORDER BY A.Orden ASC`);
+    return result.recordset;
+  },
+
+  /**
+   * Extiende días a una actividad y recalcula el cronograma
+   */
+  extenderDiasActividad: async (actividadId, diasExtra) => {
+    const { pool } = _getDbConfig();
+    const connection = await pool();
+    const transaction = connection.transaction();
+
+    try {
+      await transaction.begin();
+
+      console.log(`\n${"=".repeat(70)}`);
+      console.log(`🚀 INICIANDO EXTENSIÓN DE TIEMPO`);
+      console.log(`${"=".repeat(70)}\n`);
+
+      // 1. Obtener datos de la actividad
+      const resAct = await transaction
+        .request()
+        .input("id", sql.Int, actividadId).query(`
+        SELECT 
+          Id, 
+          ProyectoId, 
+          DiasHabiles, 
+          FechaInicioCalculada, 
+          FechaFinCalculada,
+          Estatus,
+          Orden
+        FROM dbo.ProyectosActividades 
+        WHERE Id = @id
+      `);
+
+      const actividad = resAct.recordset[0];
+
+      if (!actividad) {
+        throw new Error("Actividad no encontrada");
+      }
+
+      // Validar que la actividad no esté completada
+      if (actividad.Estatus === 3 || actividad.Estatus === 6) {
+        throw new Error("No se pueden extender días a actividades completadas");
+      }
+
+      const duracionOriginal = actividad.DiasHabiles;
+      const nuevaDuracion = duracionOriginal + diasExtra;
+
+      const fechaInicioLocal = _crearFechaLocal(actividad.FechaInicioCalculada);
+      const nuevaFechaFin = await agregarDiasHabiles(
+        fechaInicioLocal,
+        nuevaDuracion - 1,
+        transaction
+      );
+
+      const fechaFinNueva = nuevaFechaFin.toISOString().split("T")[0];
+
+      await transaction
+        .request()
+        .input("id", sql.Int, actividadId)
+        .input("dias", sql.SmallInt, nuevaDuracion)
+        .input("fechaFin", sql.Date, nuevaFechaFin).query(`
+        UPDATE dbo.ProyectosActividades 
+        SET DiasHabiles = @dias, 
+            FechaFinCalculada = @fechaFin 
+        WHERE Id = @id
+      `);
+
+      await _recalcularSucesores(actividad.Id, nuevaFechaFin, transaction);
+
+      const resProyecto = await transaction
+        .request()
+        .input("proyectoId", sql.Int, actividad.ProyectoId).query(`
+        UPDATE dbo.Proyectos 
+        SET FechaCalculadaFin = (
+          SELECT MAX(FechaFinCalculada) 
+          FROM dbo.ProyectosActividades 
+          WHERE ProyectoId = @proyectoId
+        )
+        OUTPUT INSERTED.FechaCalculadaFin
+        WHERE Id = @proyectoId
+      `);
+
+      const nuevaFechaProyecto = resProyecto.recordset[0]?.FechaCalculadaFin;
+      const fechaProyectoStr = nuevaFechaProyecto?.toISOString().split("T")[0];
+
+      await transaction.commit();
+
+      return {
+        success: true,
+        nuevaDuracion,
+        nuevaFechaFin: fechaFinNueva,
+        fechaProyecto: fechaProyectoStr,
+      };
+    } catch (err) {
+      if (transaction) await transaction.rollback();
+      throw err;
+    }
   },
 };
