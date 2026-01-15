@@ -36,6 +36,9 @@ import bloqueoRoutes from "./routes/proyectos/bloqueo.route.js";
 import calendarioRoutes from "./routes/proyectos/calendario.route.js";
 import atrasosRoutes from "./routes/proyectos/atraso.router.js";
 
+// Rutas Utils
+import documentacionRoutes from "./routes/utils/documentacion.route.js";
+
 const app = express();
 const url = "/PLM";
 
@@ -77,5 +80,8 @@ app.use(url, proyectoRoutes);
 app.use(url, bloqueoRoutes);
 app.use(url, calendarioRoutes);
 app.use(url, atrasosRoutes);
+
+// Rutas Utils
+app.use(url, documentacionRoutes);
 
 export default app;

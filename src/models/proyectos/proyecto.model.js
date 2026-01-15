@@ -39,7 +39,7 @@ const agregarDiasHabiles = async (fechaInicio, diasAAgregar, transaction) => {
   // Obtener días no laborables
   const result = await transaction
     .request()
-    .query(`SELECT Fecha FROM dbo.DiasNoLaborables WHERE Estatus = 1`);
+    .query(`SELECT Fecha FROM dbo.DiasNoLaborables`);
 
   const diasNoLaborables = new Set(
     result.recordset.map((r) => {
@@ -53,12 +53,6 @@ const agregarDiasHabiles = async (fechaInicio, diasAAgregar, transaction) => {
 
   // Crear fecha local desde el inicio
   let fecha = _crearFechaLocal(fechaInicio);
-
-  console.log(
-    `🔧 agregarDiasHabiles: Inicio=${
-      fecha.toISOString().split("T")[0]
-    }, Días a agregar=${diasAAgregar}`
-  );
 
   // Si no hay días que agregar, retornar la fecha sin cambios
   if (diasAAgregar === 0) {
@@ -1289,7 +1283,7 @@ export const ProyectoModel = {
     // Obtener días no laborables para cálculos precisos
     const resultDiasNoLaborables = await connection
       .request()
-      .query(`SELECT Fecha FROM dbo.DiasNoLaborables WHERE Estatus = 1`);
+      .query(`SELECT Fecha FROM dbo.DiasNoLaborables`);
 
     const diasNoLaborables = new Set(
       resultDiasNoLaborables.recordset.map(
@@ -1493,6 +1487,12 @@ export const ProyectoModel = {
   /**
    * Extiende días a una actividad y recalcula el cronograma
    */
+  /**
+   * Extiende días a una actividad y recalcula el cronograma
+   */
+  /**
+   * Extiende días a una actividad y recalcula el cronograma
+   */
   extenderDiasActividad: async (actividadId, diasExtra) => {
     const { pool } = _getDbConfig();
     const connection = await pool();
@@ -1501,25 +1501,22 @@ export const ProyectoModel = {
     try {
       await transaction.begin();
 
-      console.log(`\n${"=".repeat(70)}`);
-      console.log(`🚀 INICIANDO EXTENSIÓN DE TIEMPO`);
-      console.log(`${"=".repeat(70)}\n`);
-
       // 1. Obtener datos de la actividad
       const resAct = await transaction
         .request()
         .input("id", sql.Int, actividadId).query(`
-        SELECT 
-          Id, 
-          ProyectoId, 
-          DiasHabiles, 
-          FechaInicioCalculada, 
-          FechaFinCalculada,
-          Estatus,
-          Orden
-        FROM dbo.ProyectosActividades 
-        WHERE Id = @id
-      `);
+      SELECT 
+        Id, 
+        ProyectoId, 
+        DiasHabiles, 
+        DiasAtraso,
+        FechaInicioCalculada, 
+        FechaFinCalculada,
+        Estatus,
+        Orden
+      FROM dbo.ProyectosActividades 
+      WHERE Id = @id
+    `);
 
       const actividad = resAct.recordset[0];
 
@@ -1534,7 +1531,9 @@ export const ProyectoModel = {
 
       const duracionOriginal = actividad.DiasHabiles;
       const nuevaDuracion = duracionOriginal + diasExtra;
+      const diasAtrasoAnterior = actividad.DiasAtraso; // Guardar para calcular diferencia
 
+      // 2. Calcular nueva fecha fin
       const fechaInicioLocal = _crearFechaLocal(actividad.FechaInicioCalculada);
       const nuevaFechaFin = await agregarDiasHabiles(
         fechaInicioLocal,
@@ -1544,19 +1543,51 @@ export const ProyectoModel = {
 
       const fechaFinNueva = nuevaFechaFin.toISOString().split("T")[0];
 
+      // 3. Determinar si la actividad queda dentro del rango (hoy <= nuevaFechaFin)
+      const hoy = new Date();
+      hoy.setHours(0, 0, 0, 0); // Resetear a medianoche para comparación justa
+
+      const nuevaFechaFinSinHora = new Date(nuevaFechaFin);
+      nuevaFechaFinSinHora.setHours(0, 0, 0, 0);
+      const dentroDelRango = nuevaFechaFinSinHora >= hoy;
+
+      // 4. Determinar nuevo DiasAtraso y Estatus
+      let nuevoDiasAtraso = actividad.DiasAtraso; // Por defecto, mantener el actual
+      let nuevoEstatus = actividad.Estatus; // Por defecto, mantener el actual
+
+      if (dentroDelRango) {
+        // Si está dentro del rango, resetear atraso
+        nuevoDiasAtraso = 0;
+
+        // Si el estatus era "Atrasada" (4), cambiar a "En Proceso" (2)
+        if (actividad.Estatus === 4) {
+          nuevoEstatus = 2;
+        } else {
+        }
+      } else {
+        // Si aún está fuera del rango, mantener atraso y estatus actuales
+      }
+
+      // 5. Actualizar la actividad con nueva duración, fecha fin, atraso y estatus
       await transaction
         .request()
         .input("id", sql.Int, actividadId)
         .input("dias", sql.SmallInt, nuevaDuracion)
-        .input("fechaFin", sql.Date, nuevaFechaFin).query(`
+        .input("fechaFin", sql.Date, nuevaFechaFin)
+        .input("diasAtraso", sql.SmallInt, nuevoDiasAtraso)
+        .input("estatus", sql.TinyInt, nuevoEstatus).query(`
         UPDATE dbo.ProyectosActividades 
         SET DiasHabiles = @dias, 
-            FechaFinCalculada = @fechaFin 
+            FechaFinCalculada = @fechaFin,
+            DiasAtraso = @diasAtraso,
+            Estatus = @estatus
         WHERE Id = @id
       `);
 
+      // 6. Recalcular actividades sucesoras
       await _recalcularSucesores(actividad.Id, nuevaFechaFin, transaction);
 
+      // 7. Actualizar fecha fin del proyecto
       const resProyecto = await transaction
         .request()
         .input("proyectoId", sql.Int, actividad.ProyectoId).query(`
@@ -1573,6 +1604,27 @@ export const ProyectoModel = {
       const nuevaFechaProyecto = resProyecto.recordset[0]?.FechaCalculadaFin;
       const fechaProyectoStr = nuevaFechaProyecto?.toISOString().split("T")[0];
 
+      // 8. Actualizar DiasAtraso del Proyecto (suma de todas las actividades)
+      const resAtrasoProyecto = await transaction
+        .request()
+        .input("proyectoId", sql.Int, actividad.ProyectoId).query(`
+        UPDATE dbo.Proyectos
+        SET DiasAtraso = (
+            SELECT ISNULL(SUM(DiasAtraso), 0)
+            FROM dbo.ProyectosActividades
+            WHERE ProyectoId = @proyectoId
+            AND Estatus NOT IN (3, 6, 7) -- Ignorar completas/autorizadas/canceladas
+        )
+        OUTPUT INSERTED.DiasAtraso
+        WHERE Id = @proyectoId
+      `);
+
+      const nuevoDiasAtrasoProyecto =
+        resAtrasoProyecto.recordset[0]?.DiasAtraso || 0;
+
+      // 9. Actualizar porcentaje de avance del proyecto
+      await _actualizarProyectoAvance(actividad.ProyectoId, transaction);
+
       await transaction.commit();
 
       return {
@@ -1580,6 +1632,10 @@ export const ProyectoModel = {
         nuevaDuracion,
         nuevaFechaFin: fechaFinNueva,
         fechaProyecto: fechaProyectoStr,
+        diasAtraso: nuevoDiasAtraso,
+        diasAtrasoProyecto: nuevoDiasAtrasoProyecto,
+        estatus: nuevoEstatus,
+        dentroDelRango,
       };
     } catch (err) {
       if (transaction) await transaction.rollback();

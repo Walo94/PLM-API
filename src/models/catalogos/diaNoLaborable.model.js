@@ -11,7 +11,6 @@ const _mapDiaNoLaborableData = (dbRecord) => {
     id: dbRecord.Id,
     fecha: dbRecord.Fecha,
     descripcion: dbRecord.Descripcion,
-    estatus: dbRecord.Estatus,
   };
 };
 
@@ -26,12 +25,11 @@ export const DiaNoLaborableModel = {
 
     request.input("fecha", sql.Date, data.fecha);
     request.input("descripcion", sql.VarChar(100), data.descripcion);
-    request.input("estatus", sql.TinyInt, 1);
 
     const result = await request.query(
-      `INSERT INTO dbo.DiasNoLaborables (Fecha, Descripcion, Estatus) 
+      `INSERT INTO dbo.DiasNoLaborables (Fecha, Descripcion) 
        OUTPUT INSERTED.Id
-       VALUES (@fecha, @descripcion, @estatus)`
+       VALUES (@fecha, @descripcion)`
     );
 
     return { ...data, id: result.recordset[0].Id };
@@ -84,26 +82,6 @@ export const DiaNoLaborableModel = {
     await request.query(
       `UPDATE dbo.DiasNoLaborables 
        SET Fecha = @fecha, Descripcion = @descripcion 
-       WHERE Id = @id`
-    );
-
-    return data;
-  },
-
-  /**
-   * Actualiza el estatus de un día no laborable
-   */
-  updateStatus: async (id, data) => {
-    const { pool } = _getDbConfig();
-    const connection = await pool();
-    const request = connection.request();
-
-    request.input("id", sql.Int, id);
-    request.input("estatus", sql.TinyInt, data.estatus);
-
-    await request.query(
-      `UPDATE dbo.DiasNoLaborables 
-       SET Estatus = @estatus 
        WHERE Id = @id`
     );
 

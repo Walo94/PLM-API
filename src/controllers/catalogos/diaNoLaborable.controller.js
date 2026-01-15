@@ -75,24 +75,6 @@ export const updateById = asyncHandler(async (req, res) => {
 });
 
 /**
- * Actualiza el estatus de un día no laborable por su ID.
- */
-export const updateStatus = asyncHandler(async (req, res) => {
-  const id = Number(req.params.id);
-
-  if (isNaN(id)) {
-    return res.status(400).json({ message: "ID inválido" });
-  }
-
-  if (req.body.estatus === undefined) {
-    return res.status(400).json({ message: "El estatus es requerido" });
-  }
-
-  const diaActualizado = await DiaNoLaborableModel.updateStatus(id, req.body);
-  res.status(200).json(diaActualizado);
-});
-
-/**
  * Elimina un día no laborable por su ID.
  */
 export const deleteById = asyncHandler(async (req, res) => {
